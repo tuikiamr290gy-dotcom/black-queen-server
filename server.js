@@ -2,6 +2,11 @@ const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
 
+// TEMPORARY TEST MODE
+// true  = 1 real player + 3 bots
+// false = 4 real players
+const TEST_MODE = true;
+
 const server = new WebSocket.Server({
   port: PORT,
 });
@@ -10,10 +15,16 @@ const waitingPlayers = [];
 const matches = new Map();
 
 console.log(`Black Queen server running on port ${PORT}`);
+console.log(`TEST MODE: ${TEST_MODE}`);
 
 function send(player, data) {
-  if (player.readyState === WebSocket.OPEN) {
-    player.send(JSON.stringify(data));
+  if (
+    player &&
+    !player.isBot &&
+    player.socket &&
+    player.socket.readyState === WebSocket.OPEN
+  ) {
+    player.socket.send(JSON.stringify(data));
   }
 }
 
@@ -22,12 +33,6 @@ function broadcast(match, data) {
     send(player, data);
   });
 }
-
-// Suit numbers MUST match Flutter game_logic.dart:
-// 0 = Spades
-// 1 = Hearts
-// 2 = Diamonds
-// 3 = Clubs
 
 function createCard(suit, rank) {
   return {
@@ -49,7 +54,6 @@ function createDeck() {
     }
   }
 
-  // Shuffle
   for (let i = deck.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
 
@@ -72,12 +76,12 @@ function sortHand(hand) {
 }
 
 function cardPoints(card) {
-  // Black Queen = Queen of Spades
+  // Queen of Spades = 12 points
   if (card.s === 0 && card.r === 12) {
     return 12;
   }
 
-  // Every Heart = 1 point
+  // Every heart = 1 point
   if (card.s === 1) {
     return 1;
   }
@@ -86,29 +90,43 @@ function cardPoints(card) {
 }
 
 function legalCard(hand, trick, selectedCard) {
-  // Player must actually have the card.
   if (!hand.some((c) => sameCard(c, selectedCard))) {
     return false;
   }
 
-  // First card of trick: anything can be played.
   if (trick.length === 0) {
     return true;
   }
 
   const ledSuit = trick[0].card.s;
 
-  // Check whether player has the first suit.
   const hasLedSuit = hand.some(
     (c) => c.s === ledSuit
   );
 
-  // If they have that suit, they must follow it.
   if (hasLedSuit && selectedCard.s !== ledSuit) {
     return false;
   }
 
   return true;
+}
+
+function getLegalCards(hand, trick) {
+  if (trick.length === 0) {
+    return [...hand];
+  }
+
+  const ledSuit = trick[0].card.s;
+
+  const sameSuit = hand.filter(
+    (card) => card.s === ledSuit
+  );
+
+  if (sameSuit.length > 0) {
+    return sameSuit;
+  }
+
+  return [...hand];
 }
 
 function findTrickWinner(trick) {
@@ -138,7 +156,6 @@ function dealNewRound(match) {
     [],
   ];
 
-  // 13 cards per player.
   for (let seat = 0; seat < 4; seat++) {
     match.hands[seat] = deck.slice(
       seat * 13,
@@ -150,18 +167,19 @@ function dealNewRound(match) {
 
   match.trick = [];
   match.tricksPlayed = 0;
-
-  // Winner of previous deal starts the next deal.
   match.currentSeat = match.firstSeat;
-
   match.dealNumber++;
 
-  // Send each player ONLY their own cards.
+  // Send only the real player's hand.
   for (let seat = 0; seat < 4; seat++) {
-    send(match.players[seat], {
-      type: 'hand',
-      hand: match.hands[seat],
-    });
+    const player = match.players[seat];
+
+    if (!player.isBot) {
+      send(player, {
+        type: 'hand',
+        hand: match.hands[seat],
+      });
+    }
   }
 
   broadcast(match, {
@@ -169,22 +187,42 @@ function dealNewRound(match) {
     dealNumber: match.dealNumber,
     currentSeat: match.currentSeat,
     names: match.players.map(
-      (player) => player.name || 'Player'
+      (player) => player.name
     ),
-    isBot: [
-      false,
-      false,
-      false,
-      false,
-    ],
+    isBot: match.players.map(
+      (player) => player.isBot
+    ),
   });
 
   console.log(
     `Match ${match.id}: Deal ${match.dealNumber} started`
   );
+
+  // If a bot starts, let it play.
+  setTimeout(() => {
+    playBotIfNeeded(match);
+  }, 700);
 }
 
-function startMatch(players) {
+function createBot(name, seat) {
+  return {
+    name: name,
+    seat: seat,
+    isBot: true,
+    socket: null,
+    inMatch: true,
+    matchId: null,
+  };
+}
+
+function createMatch(realPlayer) {
+  const players = [
+    realPlayer,
+    createBot('Bot 2', 1),
+    createBot('Bot 3', 2),
+    createBot('Bot 4', 3),
+  ];
+
   const matchId = Math.random()
     .toString(36)
     .substring(2, 8)
@@ -215,7 +253,97 @@ function startMatch(players) {
 
     dealNumber: 0,
 
-    // Player 1 starts the first deal.
+    firstSeat: 0,
+
+    currentSeat: 0,
+
+    finished: false,
+  };
+
+  realPlayer.inMatch = true;
+  realPlayer.matchId = matchId;
+  realPlayer.seat = 0;
+
+  players.forEach((player) => {
+    player.matchId = matchId;
+  });
+
+  matches.set(matchId, match);
+
+  send(realPlayer, {
+    type: 'match_found',
+
+    matchId: matchId,
+
+    seat: 0,
+
+    players: players.map((player) => ({
+      name: player.name,
+      seat: player.seat,
+    })),
+  });
+
+  console.log(
+    `TEST MATCH ${matchId}: ${realPlayer.name} + 3 bots`
+  );
+
+  setTimeout(() => {
+    if (!match.finished) {
+      dealNewRound(match);
+    }
+  }, 1000);
+}
+
+function tryMatchPlayers() {
+  if (TEST_MODE) {
+    if (waitingPlayers.length >= 1) {
+      const player = waitingPlayers.shift();
+
+      createMatch(player);
+    }
+
+    return;
+  }
+
+  while (waitingPlayers.length >= 4) {
+    const players =
+      waitingPlayers.splice(0, 4);
+
+    startRealMatch(players);
+  }
+}
+
+function startRealMatch(players) {
+  const matchId = Math.random()
+    .toString(36)
+    .substring(2, 8)
+    .toUpperCase();
+
+  const match = {
+    id: matchId,
+
+    players: players,
+
+    hands: [
+      [],
+      [],
+      [],
+      [],
+    ],
+
+    scores: [
+      0,
+      0,
+      0,
+      0,
+    ],
+
+    trick: [],
+
+    tricksPlayed: 0,
+
+    dealNumber: 0,
+
     firstSeat: 0,
 
     currentSeat: 0,
@@ -240,31 +368,17 @@ function startMatch(players) {
       seat: index,
 
       players: players.map((p) => ({
-        name: p.name || 'Player',
+        name: p.name,
         seat: p.seat,
       })),
     });
   });
 
-  console.log(
-    `Match ${matchId} created with 4 players`
-  );
-
-  // Give the clients a moment to open the game screen.
   setTimeout(() => {
     if (!match.finished) {
       dealNewRound(match);
     }
   }, 1000);
-}
-
-function tryMatchPlayers() {
-  while (waitingPlayers.length >= 4) {
-    const players =
-      waitingPlayers.splice(0, 4);
-
-    startMatch(players);
-  }
 }
 
 function finishMatch(match) {
@@ -274,7 +388,6 @@ function finishMatch(match) {
 
   match.finished = true;
 
-  // Lowest score wins.
   let winner = 0;
 
   for (let i = 1; i < 4; i++) {
@@ -294,16 +407,107 @@ function finishMatch(match) {
     winner: winner,
 
     winnerName:
-      match.players[winner].name ||
-      'Player',
+      match.players[winner].name,
+
+    players: match.players.map(
+      (player) => ({
+        name: player.name,
+        seat: player.seat,
+        isBot: player.isBot,
+      })
+    ),
 
     reason:
       'A player reached 100 points.',
   });
 
   console.log(
-    `Match ${match.id} finished. Winner: ${match.players[winner].name} with ${match.scores[winner]} points`
+    `Match ${match.id} finished. Winner: ${match.players[winner].name}`
   );
+
+  setTimeout(() => {
+    matches.delete(match.id);
+  }, 5000);
+}
+
+function finishTrick(match) {
+  const finishedTrick = [
+    ...match.trick,
+  ];
+
+  const winner =
+    findTrickWinner(
+      finishedTrick
+    );
+
+  let points = 0;
+
+  for (const played of finishedTrick) {
+    points += cardPoints(
+      played.card
+    );
+  }
+
+  match.scores[winner] += points;
+
+  match.tricksPlayed++;
+
+  match.currentSeat = winner;
+
+  const reached100 =
+    match.scores.some(
+      (score) => score >= 100
+    );
+
+  const dealFinished =
+    match.tricksPlayed === 13;
+
+  match.trick = [];
+
+  broadcast(match, {
+    type: 'trick_result',
+
+    trick: finishedTrick,
+
+    scores: [
+      ...match.scores,
+    ],
+
+    currentSeat:
+      match.currentSeat,
+
+    dealOver:
+      reached100 || dealFinished,
+
+    winner: winner,
+
+    points: points,
+  });
+
+  if (reached100) {
+    setTimeout(() => {
+      finishMatch(match);
+    }, 1800);
+
+    return;
+  }
+
+  if (dealFinished) {
+    match.firstSeat =
+      match.currentSeat;
+
+    setTimeout(() => {
+      if (!match.finished) {
+        dealNewRound(match);
+      }
+    }, 1800);
+
+    return;
+  }
+
+  setTimeout(() => {
+    playBotIfNeeded(match);
+  }, 500);
 }
 
 function playCard(match, player, data) {
@@ -313,7 +517,6 @@ function playCard(match, player, data) {
 
   const seat = player.seat;
 
-  // Wrong player trying to play.
   if (seat !== match.currentSeat) {
     send(player, {
       type: 'error',
@@ -340,7 +543,6 @@ function playCard(match, player, data) {
 
   const hand = match.hands[seat];
 
-  // Check legal move.
   if (
     !legalCard(
       hand,
@@ -351,17 +553,20 @@ function playCard(match, player, data) {
     send(player, {
       type: 'error',
       message:
-        'You must play a card of the first suit.',
+        'You must follow the first suit if possible.',
     });
 
     return;
   }
 
-  // Find card in hand.
-  const cardIndex = hand.findIndex(
-    (card) =>
-      sameCard(card, selectedCard)
-  );
+  const cardIndex =
+    hand.findIndex(
+      (card) =>
+        sameCard(
+          card,
+          selectedCard
+        )
+    );
 
   if (cardIndex === -1) {
     send(player, {
@@ -374,127 +579,112 @@ function playCard(match, player, data) {
   }
 
   const playedCard =
-    hand.splice(cardIndex, 1)[0];
+    hand.splice(
+      cardIndex,
+      1
+    )[0];
 
   match.trick.push({
     seat: seat,
     card: playedCard,
   });
 
-  // Not all four players have played yet.
-  if (match.trick.length < 4) {
-    match.currentSeat =
-      (seat + 1) % 4;
-
-    broadcast(match, {
-      type: 'played',
-
-      trick: match.trick,
-
-      currentSeat:
-        match.currentSeat,
-    });
-
+  // Four cards = trick finished.
+  if (match.trick.length === 4) {
+    finishTrick(match);
     return;
   }
 
-  // Four cards have been played.
-  const finishedTrick =
-    [...match.trick];
+  match.currentSeat =
+    (seat + 1) % 4;
 
-  const winner =
-    findTrickWinner(
-      finishedTrick
-    );
-
-  let points = 0;
-
-  for (const played of finishedTrick) {
-    points += cardPoints(
-      played.card
-    );
-  }
-
-  // Add points to trick winner.
-  match.scores[winner] += points;
-
-  match.tricksPlayed++;
-
-  // Winner starts next trick.
-  match.currentSeat = winner;
-
-  const scores = [
-    ...match.scores,
-  ];
-
-  const reached100 =
-    match.scores.some(
-      (score) => score >= 100
-    );
-
-  const dealFinished =
-    match.tricksPlayed === 13;
-
-  // Clear current trick.
-  match.trick = [];
-
-  // Send trick result.
   broadcast(match, {
-    type: 'trick_result',
+    type: 'played',
 
-    trick: finishedTrick,
-
-    scores: scores,
+    trick: match.trick,
 
     currentSeat:
       match.currentSeat,
-
-    dealOver:
-      reached100 || dealFinished,
-
-    winner: winner,
-
-    points: points,
   });
 
-  // IMPORTANT:
-  // Online game ends immediately if
-  // ANY player reaches 100.
-  if (reached100) {
-    setTimeout(() => {
-      finishMatch(match);
-    }, 1800);
+  setTimeout(() => {
+    playBotIfNeeded(match);
+  }, 500);
+}
 
+function playBotIfNeeded(match) {
+  if (match.finished) {
     return;
   }
 
-  // Deal finished but nobody reached 100.
-  // Start another deal automatically.
-  if (dealFinished) {
-    match.firstSeat =
-      match.currentSeat;
+  const seat =
+    match.currentSeat;
 
-    setTimeout(() => {
-      if (!match.finished) {
-        dealNewRound(match);
-      }
-    }, 1800);
+  const player =
+    match.players[seat];
+
+  if (!player || !player.isBot) {
+    return;
   }
+
+  const hand =
+    match.hands[seat];
+
+  if (!hand || hand.length === 0) {
+    return;
+  }
+
+  const legalCards =
+    getLegalCards(
+      hand,
+      match.trick
+    );
+
+  if (legalCards.length === 0) {
+    return;
+  }
+
+  // Simple bot:
+  // choose a random legal card.
+  const card =
+    legalCards[
+      Math.floor(
+        Math.random() *
+          legalCards.length
+      )
+    ];
+
+  playCard(
+    match,
+    player,
+    {
+      card: card,
+    }
+  );
 }
 
 server.on('connection', (socket) => {
   console.log('Player connected');
 
-  socket.name = 'Player';
+  const player = {
+    name: 'Player',
 
-  socket.inMatch = false;
+    seat: null,
 
-  socket.matchId = null;
+    matchId: null,
 
-  socket.seat = null;
+    inMatch: false,
 
-  send(socket, {
+    isBot: false,
+
+    socket: socket,
+  };
+
+  socket.player = player;
+
+  send(player, {
     type: 'connected',
+
     message:
       'Connected to Black Queen server',
   });
@@ -506,38 +696,39 @@ server.on('connection', (socket) => {
           message.toString()
         );
 
-      // FIND MATCH
       if (
-        data.type === 'find_match'
+        data.type ===
+        'find_match'
       ) {
-        if (socket.inMatch) {
+        if (player.inMatch) {
           return;
         }
 
-        socket.name =
+        player.name =
           data.name || 'Player';
 
         if (
           !waitingPlayers.includes(
-            socket
+            player
           )
         ) {
           waitingPlayers.push(
-            socket
+            player
           );
 
-          send(socket, {
+          send(player, {
             type: 'searching',
 
-            playersWaiting:
-              waitingPlayers.length,
+            playersWaiting: 1,
 
             message:
-              'Searching for players...',
+              TEST_MODE
+                ? 'Starting test game...'
+                : 'Searching for players...',
           });
 
           console.log(
-            `${socket.name} joined matchmaking. Waiting: ${waitingPlayers.length}`
+            `${player.name} joined matchmaking`
           );
 
           tryMatchPlayers();
@@ -546,14 +737,13 @@ server.on('connection', (socket) => {
         return;
       }
 
-      // CANCEL SEARCH
       if (
         data.type ===
         'cancel_search'
       ) {
         const index =
           waitingPlayers.indexOf(
-            socket
+            player
           );
 
         if (index !== -1) {
@@ -563,20 +753,21 @@ server.on('connection', (socket) => {
           );
         }
 
-        send(socket, {
-          type: 'search_cancelled',
+        send(player, {
+          type:
+            'search_cancelled',
         });
 
         return;
       }
 
-      // PLAY CARD
       if (
         data.type === 'play'
       ) {
-        if (!socket.inMatch) {
-          send(socket, {
+        if (!player.inMatch) {
+          send(player, {
             type: 'error',
+
             message:
               'You are not in a match.',
           });
@@ -586,12 +777,13 @@ server.on('connection', (socket) => {
 
         const match =
           matches.get(
-            socket.matchId
+            player.matchId
           );
 
         if (!match) {
-          send(socket, {
+          send(player, {
             type: 'error',
+
             message:
               'Match not found.',
           });
@@ -601,15 +793,13 @@ server.on('connection', (socket) => {
 
         playCard(
           match,
-          socket,
+          player,
           data
         );
 
         return;
       }
 
-      // The server automatically starts
-      // the next deal.
       if (
         data.type ===
         'next_deal'
@@ -617,11 +807,10 @@ server.on('connection', (socket) => {
         return;
       }
 
-      // PING
       if (
         data.type === 'ping'
       ) {
-        send(socket, {
+        send(player, {
           type: 'pong',
         });
 
@@ -636,24 +825,22 @@ server.on('connection', (socket) => {
   });
 
   socket.on('close', () => {
-    const waitingIndex =
+    const index =
       waitingPlayers.indexOf(
-        socket
+        player
       );
 
-    if (waitingIndex !== -1) {
+    if (index !== -1) {
       waitingPlayers.splice(
-        waitingIndex,
+        index,
         1
       );
     }
 
-    // If a player leaves an active match,
-    // end that match for the remaining players.
-    if (socket.inMatch) {
+    if (player.inMatch) {
       const match =
         matches.get(
-          socket.matchId
+          player.matchId
         );
 
       if (
@@ -663,31 +850,27 @@ server.on('connection', (socket) => {
         match.finished = true;
 
         match.players.forEach(
-          (player) => {
-            if (
-              player !== socket &&
-              player.readyState ===
-                WebSocket.OPEN
-            ) {
-              send(player, {
+          (p) => {
+            if (!p.isBot) {
+              send(p, {
                 type:
                   'disconnected',
 
                 message:
-                  'A player disconnected from the match.',
+                  'A player disconnected.',
               });
             }
           }
         );
 
         matches.delete(
-          socket.matchId
+          player.matchId
         );
       }
     }
 
     console.log(
-      `${socket.name} disconnected`
+      `${player.name} disconnected`
     );
   });
 
