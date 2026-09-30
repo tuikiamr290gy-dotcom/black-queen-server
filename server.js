@@ -23,74 +23,87 @@ function broadcast(match, data) {
   });
 }
 
-function card(suit, rank) {
-  return { s: suit, r: rank };
-}
+// Suit numbers MUST match Flutter game_logic.dart:
+// 0 = Spades
+// 1 = Hearts
+// 2 = Diamonds
+// 3 = Clubs
 
-function cardKey(c) {
-  return `${c.s}:${c.r}`;
-}
-
-function createDeck() {
-  const deck = [];
-
-  // Suit:
-  // 0 = spades
-  // 1 = hearts
-  // 2 = diamonds
-  // 3 = clubs
-  for (let suit = 0; suit < 4; suit++) {
-    for (let rank = 2; rank <= 14; rank++) {
-      deck.push(card(suit, rank));
-    }
-  }
-
-  // Fisher-Yates shuffle
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
-
-  return deck;
-}
-
-function cardPoints(c) {
-  // Queen of Spades = 12
-  if (c.s === 0 && c.r === 12) {
-    return 12;
-  }
-
-  // Every Heart = 1
-  if (c.s === 1) {
-    return 1;
-  }
-
-  return 0;
+function createCard(suit, rank) {
+  return {
+    s: suit,
+    r: rank,
+  };
 }
 
 function sameCard(a, b) {
   return a.s === b.s && a.r === b.r;
 }
 
-function hasCard(hand, cardToFind) {
-  return hand.some((c) => sameCard(c, cardToFind));
+function createDeck() {
+  const deck = [];
+
+  for (let suit = 0; suit < 4; suit++) {
+    for (let rank = 2; rank <= 14; rank++) {
+      deck.push(createCard(suit, rank));
+    }
+  }
+
+  // Shuffle
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+
+    const temp = deck[i];
+    deck[i] = deck[j];
+    deck[j] = temp;
+  }
+
+  return deck;
 }
 
-function legalCard(hand, playedCards, selectedCard) {
-  if (!hasCard(hand, selectedCard)) {
+function sortHand(hand) {
+  hand.sort((a, b) => {
+    if (a.s !== b.s) {
+      return a.s - b.s;
+    }
+
+    return b.r - a.r;
+  });
+}
+
+function cardPoints(card) {
+  // Black Queen = Queen of Spades
+  if (card.s === 0 && card.r === 12) {
+    return 12;
+  }
+
+  // Every Heart = 1 point
+  if (card.s === 1) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function legalCard(hand, trick, selectedCard) {
+  // Player must actually have the card.
+  if (!hand.some((c) => sameCard(c, selectedCard))) {
     return false;
   }
 
-  // First card of trick: anything is allowed.
-  if (playedCards.length === 0) {
+  // First card of trick: anything can be played.
+  if (trick.length === 0) {
     return true;
   }
 
-  const ledSuit = playedCards[0].card.s;
+  const ledSuit = trick[0].card.s;
 
-  // If player has the led suit, they must follow it.
-  const hasLedSuit = hand.some((c) => c.s === ledSuit);
+  // Check whether player has the first suit.
+  const hasLedSuit = hand.some(
+    (c) => c.s === ledSuit
+  );
 
+  // If they have that suit, they must follow it.
   if (hasLedSuit && selectedCard.s !== ledSuit) {
     return false;
   }
@@ -98,7 +111,7 @@ function legalCard(hand, playedCards, selectedCard) {
   return true;
 }
 
-function trickWinner(trick) {
+function findTrickWinner(trick) {
   const ledSuit = trick[0].card.s;
 
   let winner = trick[0];
@@ -115,49 +128,60 @@ function trickWinner(trick) {
   return winner.seat;
 }
 
-function dealCards(match) {
+function dealNewRound(match) {
   const deck = createDeck();
 
-  match.hands = [[], [], [], []];
+  match.hands = [
+    [],
+    [],
+    [],
+    [],
+  ];
 
+  // 13 cards per player.
   for (let seat = 0; seat < 4; seat++) {
     match.hands[seat] = deck.slice(
       seat * 13,
-      (seat + 1) * 13
+      seat * 13 + 13
     );
 
-    // Same sorting style as Flutter:
-    // suit first, then rank high to low.
-    match.hands[seat].sort((a, b) => {
-      if (a.s !== b.s) {
-        return a.s - b.s;
-      }
-
-      return b.r - a.r;
-    });
+    sortHand(match.hands[seat]);
   }
 
   match.trick = [];
   match.tricksPlayed = 0;
+
+  // Winner of previous deal starts the next deal.
   match.currentSeat = match.firstSeat;
+
   match.dealNumber++;
 
-  match.players.forEach((player, seat) => {
-    send(player, {
+  // Send each player ONLY their own cards.
+  for (let seat = 0; seat < 4; seat++) {
+    send(match.players[seat], {
       type: 'hand',
       hand: match.hands[seat],
     });
-  });
+  }
 
   broadcast(match, {
     type: 'deal_start',
     dealNumber: match.dealNumber,
     currentSeat: match.currentSeat,
     names: match.players.map(
-      (p) => p.name || 'Player'
+      (player) => player.name || 'Player'
     ),
-    isBot: [false, false, false, false],
+    isBot: [
+      false,
+      false,
+      false,
+      false,
+    ],
   });
+
+  console.log(
+    `Match ${match.id}: Deal ${match.dealNumber} started`
+  );
 }
 
 function startMatch(players) {
@@ -168,14 +192,34 @@ function startMatch(players) {
 
   const match = {
     id: matchId,
-    players,
-    hands: [[], [], [], []],
-    scores: [0, 0, 0, 0],
+
+    players: players,
+
+    hands: [
+      [],
+      [],
+      [],
+      [],
+    ],
+
+    scores: [
+      0,
+      0,
+      0,
+      0,
+    ],
+
     trick: [],
+
     tricksPlayed: 0,
+
     dealNumber: 0,
-    currentSeat: 0,
+
+    // Player 1 starts the first deal.
     firstSeat: 0,
+
+    currentSeat: 0,
+
     finished: false,
   };
 
@@ -190,8 +234,11 @@ function startMatch(players) {
   players.forEach((player, index) => {
     send(player, {
       type: 'match_found',
-      matchId,
+
+      matchId: matchId,
+
       seat: index,
+
       players: players.map((p) => ({
         name: p.name || 'Player',
         seat: p.seat,
@@ -203,22 +250,24 @@ function startMatch(players) {
     `Match ${matchId} created with 4 players`
   );
 
-  // Start the first deal.
+  // Give the clients a moment to open the game screen.
   setTimeout(() => {
     if (!match.finished) {
-      dealCards(match);
+      dealNewRound(match);
     }
   }, 1000);
 }
 
 function tryMatchPlayers() {
   while (waitingPlayers.length >= 4) {
-    const players = waitingPlayers.splice(0, 4);
+    const players =
+      waitingPlayers.splice(0, 4);
+
     startMatch(players);
   }
 }
 
-function finishOnlineGame(match) {
+function finishMatch(match) {
   if (match.finished) {
     return;
   }
@@ -229,37 +278,48 @@ function finishOnlineGame(match) {
   let winner = 0;
 
   for (let i = 1; i < 4; i++) {
-    if (match.scores[i] < match.scores[winner]) {
+    if (
+      match.scores[i] <
+      match.scores[winner]
+    ) {
       winner = i;
     }
   }
 
   broadcast(match, {
     type: 'game_over',
+
     scores: match.scores,
+
     winner: winner,
+
     winnerName:
-      match.players[winner].name || 'Player',
-    reason: 'A player reached 100 points.',
+      match.players[winner].name ||
+      'Player',
+
+    reason:
+      'A player reached 100 points.',
   });
 
   console.log(
-    `Match ${match.id} finished. Winner: ${match.players[winner].name} (${match.scores[winner]} points)`
+    `Match ${match.id} finished. Winner: ${match.players[winner].name} with ${match.scores[winner]} points`
   );
 }
 
-function handlePlay(match, player, data) {
+function playCard(match, player, data) {
   if (match.finished) {
     return;
   }
 
   const seat = player.seat;
 
+  // Wrong player trying to play.
   if (seat !== match.currentSeat) {
     send(player, {
       type: 'error',
       message: 'It is not your turn.',
     });
+
     return;
   }
 
@@ -274,122 +334,151 @@ function handlePlay(match, player, data) {
       type: 'error',
       message: 'Invalid card.',
     });
+
     return;
   }
 
   const hand = match.hands[seat];
 
-  if (!legalCard(
-    hand,
-    match.trick,
-    selectedCard
-  )) {
+  // Check legal move.
+  if (
+    !legalCard(
+      hand,
+      match.trick,
+      selectedCard
+    )
+  ) {
     send(player, {
       type: 'error',
       message:
         'You must play a card of the first suit.',
     });
+
     return;
   }
 
+  // Find card in hand.
   const cardIndex = hand.findIndex(
-    (c) => sameCard(c, selectedCard)
+    (card) =>
+      sameCard(card, selectedCard)
   );
 
   if (cardIndex === -1) {
     send(player, {
       type: 'error',
-      message: 'You do not have this card.',
+      message:
+        'You do not have this card.',
     });
+
     return;
   }
 
-  const playedCard = hand.splice(
-    cardIndex,
-    1
-  )[0];
+  const playedCard =
+    hand.splice(cardIndex, 1)[0];
 
   match.trick.push({
-    seat,
+    seat: seat,
     card: playedCard,
   });
 
-  // Not everyone has played yet.
+  // Not all four players have played yet.
   if (match.trick.length < 4) {
-    match.currentSeat = (seat + 1) % 4;
+    match.currentSeat =
+      (seat + 1) % 4;
 
     broadcast(match, {
       type: 'played',
+
       trick: match.trick,
-      currentSeat: match.currentSeat,
+
+      currentSeat:
+        match.currentSeat,
     });
 
     return;
   }
 
-  // Four players have played.
-  const finishedTrick = [...match.trick];
+  // Four cards have been played.
+  const finishedTrick =
+    [...match.trick];
 
-  const winner = trickWinner(
-    finishedTrick
-  );
+  const winner =
+    findTrickWinner(
+      finishedTrick
+    );
 
-  const points = finishedTrick.reduce(
-    (sum, played) =>
-      sum + cardPoints(played.card),
-    0
-  );
+  let points = 0;
 
+  for (const played of finishedTrick) {
+    points += cardPoints(
+      played.card
+    );
+  }
+
+  // Add points to trick winner.
   match.scores[winner] += points;
 
   match.tricksPlayed++;
 
+  // Winner starts next trick.
   match.currentSeat = winner;
 
-  const allCardsFinished =
-    match.tricksPlayed === 13;
+  const scores = [
+    ...match.scores,
+  ];
 
-  // ONLINE-ONLY RULE:
-  // The game ends immediately when ANY player
-  // reaches 100 or more points.
-  const someoneReached100 =
+  const reached100 =
     match.scores.some(
       (score) => score >= 100
     );
 
-  const gameFinished =
-    someoneReached100 || allCardsFinished;
+  const dealFinished =
+    match.tricksPlayed === 13;
 
+  // Clear current trick.
   match.trick = [];
 
+  // Send trick result.
   broadcast(match, {
     type: 'trick_result',
+
     trick: finishedTrick,
-    scores: match.scores,
-    currentSeat: match.currentSeat,
-    dealOver: gameFinished,
-    winner,
-    points,
+
+    scores: scores,
+
+    currentSeat:
+      match.currentSeat,
+
+    dealOver:
+      reached100 || dealFinished,
+
+    winner: winner,
+
+    points: points,
   });
 
-  if (gameFinished) {
-    if (someoneReached100) {
-      setTimeout(() => {
-        finishOnlineGame(match);
-      }, 1700);
-    } else {
-      // A deal normally has 13 tricks.
-      // In online mode we continue to the next deal
-      // unless someone has reached 100.
-      setTimeout(() => {
-        if (!match.finished) {
-          match.firstSeat = match.currentSeat;
-          dealCards(match);
-        }
-      }, 1800);
-    }
+  // IMPORTANT:
+  // Online game ends immediately if
+  // ANY player reaches 100.
+  if (reached100) {
+    setTimeout(() => {
+      finishMatch(match);
+    }, 1800);
 
     return;
+  }
+
+  // Deal finished but nobody reached 100.
+  // Start another deal automatically.
+  if (dealFinished) {
+    match.firstSeat =
+      match.currentSeat;
+
+    setTimeout(() => {
+      if (!match.finished) {
+        dealNewRound(match);
+      }
+    }, 1800);
   }
 }
 
@@ -397,22 +486,30 @@ server.on('connection', (socket) => {
   console.log('Player connected');
 
   socket.name = 'Player';
+
   socket.inMatch = false;
+
   socket.matchId = null;
+
   socket.seat = null;
 
   send(socket, {
     type: 'connected',
-    message: 'Connected to Black Queen server',
+    message:
+      'Connected to Black Queen server',
   });
 
   socket.on('message', (message) => {
     try {
-      const data = JSON.parse(
-        message.toString()
-      );
+      const data =
+        JSON.parse(
+          message.toString()
+        );
 
-      if (data.type === 'find_match') {
+      // FIND MATCH
+      if (
+        data.type === 'find_match'
+      ) {
         if (socket.inMatch) {
           return;
         }
@@ -420,13 +517,21 @@ server.on('connection', (socket) => {
         socket.name =
           data.name || 'Player';
 
-        if (!waitingPlayers.includes(socket)) {
-          waitingPlayers.push(socket);
+        if (
+          !waitingPlayers.includes(
+            socket
+          )
+        ) {
+          waitingPlayers.push(
+            socket
+          );
 
           send(socket, {
             type: 'searching',
+
             playersWaiting:
               waitingPlayers.length,
+
             message:
               'Searching for players...',
           });
@@ -441,12 +546,21 @@ server.on('connection', (socket) => {
         return;
       }
 
-      if (data.type === 'cancel_search') {
+      // CANCEL SEARCH
+      if (
+        data.type ===
+        'cancel_search'
+      ) {
         const index =
-          waitingPlayers.indexOf(socket);
+          waitingPlayers.indexOf(
+            socket
+          );
 
         if (index !== -1) {
-          waitingPlayers.splice(index, 1);
+          waitingPlayers.splice(
+            index,
+            1
+          );
         }
 
         send(socket, {
@@ -456,27 +570,36 @@ server.on('connection', (socket) => {
         return;
       }
 
-      if (data.type === 'play') {
+      // PLAY CARD
+      if (
+        data.type === 'play'
+      ) {
         if (!socket.inMatch) {
           send(socket, {
             type: 'error',
-            message: 'You are not in a match.',
+            message:
+              'You are not in a match.',
           });
+
           return;
         }
 
         const match =
-          matches.get(socket.matchId);
+          matches.get(
+            socket.matchId
+          );
 
         if (!match) {
           send(socket, {
             type: 'error',
-            message: 'Match not found.',
+            message:
+              'Match not found.',
           });
+
           return;
         }
 
-        handlePlay(
+        playCard(
           match,
           socket,
           data
@@ -485,20 +608,19 @@ server.on('connection', (socket) => {
         return;
       }
 
-      if (data.type === 'next_deal') {
-        const match =
-          matches.get(socket.matchId);
-
-        if (!match || match.finished) {
-          return;
-        }
-
-        // The server automatically starts the
-        // next deal, so this message is ignored.
+      // The server automatically starts
+      // the next deal.
+      if (
+        data.type ===
+        'next_deal'
+      ) {
         return;
       }
 
-      if (data.type === 'ping') {
+      // PING
+      if (
+        data.type === 'ping'
+      ) {
         send(socket, {
           type: 'pong',
         });
@@ -515,7 +637,9 @@ server.on('connection', (socket) => {
 
   socket.on('close', () => {
     const waitingIndex =
-      waitingPlayers.indexOf(socket);
+      waitingPlayers.indexOf(
+        socket
+      );
 
     if (waitingIndex !== -1) {
       waitingPlayers.splice(
@@ -524,11 +648,18 @@ server.on('connection', (socket) => {
       );
     }
 
+    // If a player leaves an active match,
+    // end that match for the remaining players.
     if (socket.inMatch) {
       const match =
-        matches.get(socket.matchId);
+        matches.get(
+          socket.matchId
+        );
 
-      if (match && !match.finished) {
+      if (
+        match &&
+        !match.finished
+      ) {
         match.finished = true;
 
         match.players.forEach(
@@ -539,7 +670,9 @@ server.on('connection', (socket) => {
                 WebSocket.OPEN
             ) {
               send(player, {
-                type: 'disconnected',
+                type:
+                  'disconnected',
+
                 message:
                   'A player disconnected from the match.',
               });
@@ -547,7 +680,9 @@ server.on('connection', (socket) => {
           }
         );
 
-        matches.delete(socket.matchId);
+        matches.delete(
+          socket.matchId
+        );
       }
     }
 
