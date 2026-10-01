@@ -54,6 +54,7 @@ function createDeck() {
     }
   }
 
+  // Shuffle deck
   for (let i = deck.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
 
@@ -75,6 +76,20 @@ function sortHand(hand) {
   });
 }
 
+
+/*
+========================================================
+CURRENT SCORING
+========================================================
+
+IMPORTANT:
+This is still your old scoring system.
+
+You told me your actual game uses different scoring.
+I have NOT changed it because you haven't given the
+new scoring rules yet.
+*/
+
 function cardPoints(card) {
   // Queen of Spades = 12 points
   if (card.s === 0 && card.r === 12) {
@@ -89,35 +104,149 @@ function cardPoints(card) {
   return 0;
 }
 
-// ============================================================
-// CARD VALIDATION
-// ============================================================
-//
-// IMPORTANT:
-// There is NO "follow the first suit" rule.
-//
-// A player can play ANY card from their hand.
-// The only validation here is:
-// "Does the player actually have this card?"
-//
+
+/*
+========================================================
+CORRECT TRICK RULE
+========================================================
+
+1. First player can play ANY card.
+
+2. That first card establishes the LEAD SUIT.
+
+3. Every following player checks their COMPLETE
+   CURRENT HAND.
+
+4. If they have at least one card of the lead suit,
+   they MUST play that suit.
+
+5. If they have ZERO cards of the lead suit,
+   they can play ANY card.
+
+6. After 4 cards, the trick ends.
+
+7. Winner starts the next trick.
+
+8. The rule resets for every new trick.
+========================================================
+*/
 
 function legalCard(hand, trick, selectedCard) {
-  return hand.some((c) => sameCard(c, selectedCard));
+  // --------------------------------------------------
+  // 1. Player must actually have the selected card.
+  // --------------------------------------------------
+
+  const hasCard = hand.some(
+    (card) => sameCard(card, selectedCard)
+  );
+
+  if (!hasCard) {
+    return false;
+  }
+
+  // --------------------------------------------------
+  // 2. First player of the trick can play ANY card.
+  // --------------------------------------------------
+
+  if (trick.length === 0) {
+    return true;
+  }
+
+  // --------------------------------------------------
+  // 3. First card of this trick establishes the
+  //    lead suit.
+  // --------------------------------------------------
+
+  const leadSuit = trick[0].card.s;
+
+  // --------------------------------------------------
+  // 4. Check the player's COMPLETE CURRENT HAND
+  //    for the lead suit.
+  // --------------------------------------------------
+
+  const hasLeadSuit = hand.some(
+    (card) => card.s === leadSuit
+  );
+
+  // --------------------------------------------------
+  // 5. If player has the lead suit, they MUST play it.
+  // --------------------------------------------------
+
+  if (hasLeadSuit) {
+    return selectedCard.s === leadSuit;
+  }
+
+  // --------------------------------------------------
+  // 6. Player has NO lead-suit card.
+  //    Any card is allowed.
+  // --------------------------------------------------
+
+  return true;
 }
 
-// Any card can also be played by the bot.
+
+/*
+========================================================
+BOT LEGAL CARDS
+========================================================
+*/
+
 function getLegalCards(hand, trick) {
+  // --------------------------------------------------
+  // First player can play ANY card.
+  // --------------------------------------------------
+
+  if (trick.length === 0) {
+    return [...hand];
+  }
+
+  // --------------------------------------------------
+  // Get lead suit from the first card of this trick.
+  // --------------------------------------------------
+
+  const leadSuit = trick[0].card.s;
+
+  // --------------------------------------------------
+  // Find ALL cards of that suit in the bot's
+  // current hand.
+  // --------------------------------------------------
+
+  const leadSuitCards = hand.filter(
+    (card) => card.s === leadSuit
+  );
+
+  // --------------------------------------------------
+  // Bot has lead suit.
+  // Bot MUST play one of those cards.
+  // --------------------------------------------------
+
+  if (leadSuitCards.length > 0) {
+    return leadSuitCards;
+  }
+
+  // --------------------------------------------------
+  // Bot has no lead-suit cards.
+  // Bot can play anything.
+  // --------------------------------------------------
+
   return [...hand];
 }
 
+
+/*
+========================================================
+FIND TRICK WINNER
+========================================================
+*/
+
 function findTrickWinner(trick) {
-  const ledSuit = trick[0].card.s;
+  const leadSuit = trick[0].card.s;
 
   let winner = trick[0];
 
   for (const played of trick) {
     if (
-      played.card.s === ledSuit &&
+      played.card.s === leadSuit &&
       played.card.r > winner.card.r
     ) {
       winner = played;
@@ -126,6 +255,13 @@ function findTrickWinner(trick) {
 
   return winner.seat;
 }
+
+
+/*
+========================================================
+DEAL 13 CARDS
+========================================================
+*/
 
 function dealNewRound(match) {
   const deck = createDeck();
@@ -137,6 +273,7 @@ function dealNewRound(match) {
     [],
   ];
 
+  // 13 cards per player
   for (let seat = 0; seat < 4; seat++) {
     match.hands[seat] = deck.slice(
       seat * 13,
@@ -146,9 +283,16 @@ function dealNewRound(match) {
     sortHand(match.hands[seat]);
   }
 
+  // New trick
   match.trick = [];
+
+  // Reset tricks for this deal
   match.tricksPlayed = 0;
+
+  // Winner of previous deal starts,
+  // otherwise firstSeat.
   match.currentSeat = match.firstSeat;
+
   match.dealNumber++;
 
   // Send only the real player's hand.
@@ -165,11 +309,15 @@ function dealNewRound(match) {
 
   broadcast(match, {
     type: 'deal_start',
+
     dealNumber: match.dealNumber,
+
     currentSeat: match.currentSeat,
+
     names: match.players.map(
       (player) => player.name
     ),
+
     isBot: match.players.map(
       (player) => player.isBot
     ),
@@ -185,22 +333,44 @@ function dealNewRound(match) {
   }, 700);
 }
 
+
+/*
+========================================================
+CREATE BOT
+========================================================
+*/
+
 function createBot(name, seat) {
   return {
     name: name,
+
     seat: seat,
+
     isBot: true,
+
     socket: null,
+
     inMatch: true,
+
     matchId: null,
   };
 }
 
+
+/*
+========================================================
+CREATE TEST MATCH
+========================================================
+*/
+
 function createMatch(realPlayer) {
   const players = [
     realPlayer,
+
     createBot('Bot 2', 1),
+
     createBot('Bot 3', 2),
+
     createBot('Bot 4', 3),
   ];
 
@@ -242,7 +412,9 @@ function createMatch(realPlayer) {
   };
 
   realPlayer.inMatch = true;
+
   realPlayer.matchId = matchId;
+
   realPlayer.seat = 0;
 
   players.forEach((player) => {
@@ -275,6 +447,13 @@ function createMatch(realPlayer) {
   }, 1000);
 }
 
+
+/*
+========================================================
+MATCHMAKING
+========================================================
+*/
+
 function tryMatchPlayers() {
   if (TEST_MODE) {
     if (waitingPlayers.length >= 1) {
@@ -293,6 +472,13 @@ function tryMatchPlayers() {
     startRealMatch(players);
   }
 }
+
+
+/*
+========================================================
+REAL 4 PLAYER MATCH
+========================================================
+*/
 
 function startRealMatch(players) {
   const matchId = Math.random()
@@ -336,7 +522,9 @@ function startRealMatch(players) {
 
   players.forEach((player, index) => {
     player.inMatch = true;
+
     player.matchId = matchId;
+
     player.seat = index;
   });
 
@@ -361,6 +549,19 @@ function startRealMatch(players) {
     }
   }, 1000);
 }
+
+
+/*
+========================================================
+FINISH MATCH
+========================================================
+
+NOTE:
+This is still the old scoring/end-game logic.
+Do not use this as your final game rule until
+you give me your actual scoring rules.
+========================================================
+*/
 
 function finishMatch(match) {
   if (match.finished) {
@@ -411,16 +612,25 @@ function finishMatch(match) {
   }, 5000);
 }
 
+
+/*
+========================================================
+FINISH TRICK
+========================================================
+*/
+
 function finishTrick(match) {
   const finishedTrick = [
     ...match.trick,
   ];
 
+  // Find winner of this 4-card trick.
   const winner =
     findTrickWinner(
       finishedTrick
     );
 
+  // Current scoring system.
   let points = 0;
 
   for (const played of finishedTrick) {
@@ -433,6 +643,7 @@ function finishTrick(match) {
 
   match.tricksPlayed++;
 
+  // Winner becomes starter of next trick.
   match.currentSeat = winner;
 
   const reached100 =
@@ -443,6 +654,7 @@ function finishTrick(match) {
   const dealFinished =
     match.tricksPlayed === 13;
 
+  // Clear current trick.
   match.trick = [];
 
   broadcast(match, {
@@ -465,6 +677,7 @@ function finishTrick(match) {
     points: points,
   });
 
+  // Old game-ending rule.
   if (reached100) {
     setTimeout(() => {
       finishMatch(match);
@@ -473,6 +686,7 @@ function finishTrick(match) {
     return;
   }
 
+  // All 13 tricks completed.
   if (dealFinished) {
     match.firstSeat =
       match.currentSeat;
@@ -486,10 +700,18 @@ function finishTrick(match) {
     return;
   }
 
+  // Winner starts next trick.
   setTimeout(() => {
     playBotIfNeeded(match);
   }, 500);
 }
+
+
+/*
+========================================================
+PLAY CARD
+========================================================
+*/
 
 function playCard(match, player, data) {
   if (match.finished) {
@@ -498,16 +720,26 @@ function playCard(match, player, data) {
 
   const seat = player.seat;
 
+  // --------------------------------------------------
+  // Check turn.
+  // --------------------------------------------------
+
   if (seat !== match.currentSeat) {
     send(player, {
       type: 'error',
-      message: 'It is not your turn.',
+
+      message:
+        'It is not your turn.',
     });
 
     return;
   }
 
   const selectedCard = data.card;
+
+  // --------------------------------------------------
+  // Validate card data.
+  // --------------------------------------------------
 
   if (
     !selectedCard ||
@@ -516,7 +748,9 @@ function playCard(match, player, data) {
   ) {
     send(player, {
       type: 'error',
-      message: 'Invalid card.',
+
+      message:
+        'Invalid card.',
     });
 
     return;
@@ -524,9 +758,13 @@ function playCard(match, player, data) {
 
   const hand = match.hands[seat];
 
-  // IMPORTANT:
-  // No suit restriction here.
-  // Any card in the player's hand is legal.
+  // --------------------------------------------------
+  // THIS IS THE IMPORTANT RULE CHECK.
+  //
+  // If the trick already has a card and the player
+  // has that lead suit, they MUST play that suit.
+  // --------------------------------------------------
+
   if (
     !legalCard(
       hand,
@@ -536,12 +774,17 @@ function playCard(match, player, data) {
   ) {
     send(player, {
       type: 'error',
+
       message:
-        'You do not have this card.',
+        'You must follow the lead suit if you have one.',
     });
 
     return;
   }
+
+  // --------------------------------------------------
+  // Find selected card in player's hand.
+  // --------------------------------------------------
 
   const cardIndex =
     hand.findIndex(
@@ -555,6 +798,7 @@ function playCard(match, player, data) {
   if (cardIndex === -1) {
     send(player, {
       type: 'error',
+
       message:
         'You do not have this card.',
     });
@@ -562,22 +806,39 @@ function playCard(match, player, data) {
     return;
   }
 
+  // --------------------------------------------------
+  // Remove card from hand.
+  // --------------------------------------------------
+
   const playedCard =
     hand.splice(
       cardIndex,
       1
     )[0];
 
+  // --------------------------------------------------
+  // Add card to current trick.
+  // --------------------------------------------------
+
   match.trick.push({
     seat: seat,
+
     card: playedCard,
   });
 
+  // --------------------------------------------------
   // Four cards = trick finished.
+  // --------------------------------------------------
+
   if (match.trick.length === 4) {
     finishTrick(match);
+
     return;
   }
+
+  // --------------------------------------------------
+  // Next player.
+  // --------------------------------------------------
 
   match.currentSeat =
     (seat + 1) % 4;
@@ -591,10 +852,21 @@ function playCard(match, player, data) {
       match.currentSeat,
   });
 
+  // --------------------------------------------------
+  // If next player is a bot, let bot play.
+  // --------------------------------------------------
+
   setTimeout(() => {
     playBotIfNeeded(match);
   }, 500);
 }
+
+
+/*
+========================================================
+BOT PLAY
+========================================================
+*/
 
 function playBotIfNeeded(match) {
   if (match.finished) {
@@ -607,6 +879,7 @@ function playBotIfNeeded(match) {
   const player =
     match.players[seat];
 
+  // Not a bot.
   if (!player || !player.isBot) {
     return;
   }
@@ -618,16 +891,27 @@ function playBotIfNeeded(match) {
     return;
   }
 
+  // --------------------------------------------------
   // IMPORTANT:
-  // Bots can also play ANY card.
-  const legalCards = [...hand];
+  // This returns ONLY lead-suit cards if the bot
+  // has the lead suit.
+  //
+  // If the bot has no lead-suit card, it returns
+  // the complete hand.
+  // --------------------------------------------------
+
+  const legalCards =
+    getLegalCards(
+      hand,
+      match.trick
+    );
 
   if (legalCards.length === 0) {
     return;
   }
 
   // Simple bot:
-  // choose a random card.
+  // choose a random LEGAL card.
   const card =
     legalCards[
       Math.floor(
@@ -644,6 +928,13 @@ function playBotIfNeeded(match) {
     }
   );
 }
+
+
+/*
+========================================================
+WEBSOCKET CONNECTION
+========================================================
+*/
 
 server.on('connection', (socket) => {
   console.log('Player connected');
@@ -671,12 +962,24 @@ server.on('connection', (socket) => {
       'Connected to Black Queen server',
   });
 
+  /*
+  ======================================================
+  RECEIVE MESSAGE
+  ======================================================
+  */
+
   socket.on('message', (message) => {
     try {
       const data =
         JSON.parse(
           message.toString()
         );
+
+      /*
+      ====================================================
+      FIND MATCH
+      ====================================================
+      */
 
       if (
         data.type ===
@@ -719,6 +1022,12 @@ server.on('connection', (socket) => {
         return;
       }
 
+      /*
+      ====================================================
+      CANCEL SEARCH
+      ====================================================
+      */
+
       if (
         data.type ===
         'cancel_search'
@@ -742,6 +1051,12 @@ server.on('connection', (socket) => {
 
         return;
       }
+
+      /*
+      ====================================================
+      PLAY CARD
+      ====================================================
+      */
 
       if (
         data.type === 'play'
@@ -782,6 +1097,12 @@ server.on('connection', (socket) => {
         return;
       }
 
+      /*
+      ====================================================
+      NEXT DEAL
+      ====================================================
+      */
+
       if (
         data.type ===
         'next_deal'
@@ -789,77 +1110,5 @@ server.on('connection', (socket) => {
         return;
       }
 
-      if (
-        data.type === 'ping'
-      ) {
-        send(player, {
-          type: 'pong',
-        });
-
-        return;
-      }
-    } catch (error) {
-      console.error(
-        'Invalid message:',
-        error
-      );
-    }
-  });
-
-  socket.on('close', () => {
-    const index =
-      waitingPlayers.indexOf(
-        player
-      );
-
-    if (index !== -1) {
-      waitingPlayers.splice(
-        index,
-        1
-      );
-    }
-
-    if (player.inMatch) {
-      const match =
-        matches.get(
-          player.matchId
-        );
-
-      if (
-        match &&
-        !match.finished
-      ) {
-        match.finished = true;
-
-        match.players.forEach(
-          (p) => {
-            if (!p.isBot) {
-              send(p, {
-                type:
-                  'disconnected',
-
-                message:
-                  'A player disconnected.',
-              });
-            }
-          }
-        );
-
-        matches.delete(
-          player.matchId
-        );
-      }
-    }
-
-    console.log(
-      `${player.name} disconnected`
-    );
-  });
-
-  socket.on('error', (error) => {
-    console.error(
-      'Socket error:',
-      error.message
-    );
-  });
-});
+      /*
+      =================================================
