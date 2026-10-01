@@ -89,43 +89,24 @@ function cardPoints(card) {
   return 0;
 }
 
+// ============================================================
+// CARD VALIDATION
+// ============================================================
+//
+// IMPORTANT:
+// There is NO "follow the first suit" rule.
+//
+// A player can play ANY card from their hand.
+// The only validation here is:
+// "Does the player actually have this card?"
+//
+
 function legalCard(hand, trick, selectedCard) {
-  if (!hand.some((c) => sameCard(c, selectedCard))) {
-    return false;
-  }
-
-  if (trick.length === 0) {
-    return true;
-  }
-
-  const ledSuit = trick[0].card.s;
-
-  const hasLedSuit = hand.some(
-    (c) => c.s === ledSuit
-  );
-
-  if (hasLedSuit && selectedCard.s !== ledSuit) {
-    return false;
-  }
-
-  return true;
+  return hand.some((c) => sameCard(c, selectedCard));
 }
 
+// Any card can also be played by the bot.
 function getLegalCards(hand, trick) {
-  if (trick.length === 0) {
-    return [...hand];
-  }
-
-  const ledSuit = trick[0].card.s;
-
-  const sameSuit = hand.filter(
-    (card) => card.s === ledSuit
-  );
-
-  if (sameSuit.length > 0) {
-    return sameSuit;
-  }
-
   return [...hand];
 }
 
@@ -543,6 +524,9 @@ function playCard(match, player, data) {
 
   const hand = match.hands[seat];
 
+  // IMPORTANT:
+  // No suit restriction here.
+  // Any card in the player's hand is legal.
   if (
     !legalCard(
       hand,
@@ -553,7 +537,7 @@ function playCard(match, player, data) {
     send(player, {
       type: 'error',
       message:
-        'You must follow the first suit if possible.',
+        'You do not have this card.',
     });
 
     return;
@@ -634,18 +618,16 @@ function playBotIfNeeded(match) {
     return;
   }
 
-  const legalCards =
-    getLegalCards(
-      hand,
-      match.trick
-    );
+  // IMPORTANT:
+  // Bots can also play ANY card.
+  const legalCards = [...hand];
 
   if (legalCards.length === 0) {
     return;
   }
 
   // Simple bot:
-  // choose a random legal card.
+  // choose a random card.
   const card =
     legalCards[
       Math.floor(
