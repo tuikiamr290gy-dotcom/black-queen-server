@@ -862,12 +862,6 @@ function playCard(match, player, data) {
 }
 
 
-/*
-========================================================
-BOT PLAY
-========================================================
-*/
-
 function playBotIfNeeded(match) {
   if (match.finished) {
     return;
@@ -890,15 +884,6 @@ function playBotIfNeeded(match) {
   if (!hand || hand.length === 0) {
     return;
   }
-
-  // --------------------------------------------------
-  // IMPORTANT:
-  // This returns ONLY lead-suit cards if the bot
-  // has the lead suit.
-  //
-  // If the bot has no lead-suit card, it returns
-  // the complete hand.
-  // --------------------------------------------------
 
   const legalCards =
     getLegalCards(
@@ -930,11 +915,7 @@ function playBotIfNeeded(match) {
 }
 
 
-/*
-========================================================
-WEBSOCKET CONNECTION
-========================================================
-*/
+
 
 server.on('connection', (socket) => {
   console.log('Player connected');
@@ -962,11 +943,7 @@ server.on('connection', (socket) => {
       'Connected to Black Queen server',
   });
 
-  /*
-  ======================================================
-  RECEIVE MESSAGE
-  ======================================================
-  */
+
 
   socket.on('message', (message) => {
     try {
@@ -975,11 +952,7 @@ server.on('connection', (socket) => {
           message.toString()
         );
 
-      /*
-      ====================================================
-      FIND MATCH
-      ====================================================
-      */
+      
 
       if (
         data.type ===
@@ -1022,11 +995,7 @@ server.on('connection', (socket) => {
         return;
       }
 
-      /*
-      ====================================================
-      CANCEL SEARCH
-      ====================================================
-      */
+      
 
       if (
         data.type ===
@@ -1052,12 +1021,7 @@ server.on('connection', (socket) => {
         return;
       }
 
-      /*
-      ====================================================
-      PLAY CARD
-      ====================================================
-      */
-
+    
       if (
         data.type === 'play'
       ) {
@@ -1097,18 +1061,9 @@ server.on('connection', (socket) => {
         return;
       }
 
-      /*
-      ====================================================
-      NEXT DEAL
-      ====================================================
-      */
-
       if (
         data.type ===
         'next_deal'
       ) {
         return;
       }
-
-      /*
-      =================================================
