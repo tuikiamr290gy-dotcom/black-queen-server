@@ -1,7 +1,10 @@
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
-const TEST_MODE = true;
+
+// ONLINE MODE: real players only.
+// Do not change this back to true.
+const TEST_MODE = false;
 
 const server = new WebSocket.Server({
   port: PORT,
@@ -30,6 +33,23 @@ function broadcast(match, data) {
   });
 }
 
+// Send the current waiting-player list to EVERYONE
+// who is currently waiting for a match.
+function broadcastWaitingPlayers() {
+  const names = waitingPlayers.map(
+    (player) => player.name || 'Player'
+  );
+
+  waitingPlayers.forEach((player) => {
+    send(player, {
+      type: 'searching',
+      playersWaiting: waitingPlayers.length,
+      playerNames: names,
+      message: 'Searching for players...',
+    });
+  });
+}
+
 function createCard(suit, rank) {
   return {
     s: suit,
@@ -52,6 +72,7 @@ function createDeck() {
 
   for (let i = deck.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
+
     const temp = deck[i];
     deck[i] = deck[j];
     deck[j] = temp;
@@ -128,6 +149,7 @@ function getLegalCards(hand, trick) {
 
 function findTrickWinner(trick) {
   const leadSuit = trick[0].card.s;
+
   let winner = trick[0];
 
   for (const played of trick) {
@@ -162,126 +184,41 @@ function dealNewRound(match) {
   }
 
   match.trick = [];
+
   match.tricksPlayed = 0;
+
   match.currentSeat = match.firstSeat;
+
   match.dealNumber++;
 
   for (let seat = 0; seat < 4; seat++) {
     const player = match.players[seat];
 
-    if (!player.isBot) {
-      send(player, {
-        type: 'hand',
-        hand: match.hands[seat],
-      });
-    }
+    send(player, {
+      type: 'hand',
+      hand: match.hands[seat],
+    });
   }
 
   broadcast(match, {
     type: 'deal_start',
+
     dealNumber: match.dealNumber,
+
     currentSeat: match.currentSeat,
+
     names: match.players.map(
       (player) => player.name
     ),
+
     isBot: match.players.map(
       (player) => player.isBot
     ),
   });
 
-  setTimeout(() => {
-    playBotIfNeeded(match);
-  }, 700);
-}
-
-function createBot(name, seat) {
-  return {
-    name,
-    seat,
-    isBot: true,
-    socket: null,
-    inMatch: true,
-    matchId: null,
-  };
-}
-
-function createMatch(realPlayer) {
-  const players = [
-    realPlayer,
-    createBot('Bot 2', 1),
-    createBot('Bot 3', 2),
-    createBot('Bot 4', 3),
-  ];
-
-  const matchId = Math.random()
-    .toString(36)
-    .substring(2, 8)
-    .toUpperCase();
-
-  const match = {
-    id: matchId,
-    players,
-    hands: [
-      [],
-      [],
-      [],
-      [],
-    ],
-    scores: [
-      0,
-      0,
-      0,
-      0,
-    ],
-    trick: [],
-    tricksPlayed: 0,
-    dealNumber: 0,
-    firstSeat: 0,
-    currentSeat: 0,
-    finished: false,
-  };
-
-  realPlayer.inMatch = true;
-  realPlayer.matchId = matchId;
-  realPlayer.seat = 0;
-
-  players.forEach((player) => {
-    player.matchId = matchId;
-  });
-
-  matches.set(matchId, match);
-
-  send(realPlayer, {
-    type: 'match_found',
-    matchId,
-    seat: 0,
-    players: players.map((player) => ({
-      name: player.name,
-      seat: player.seat,
-    })),
-  });
-
-  setTimeout(() => {
-    if (!match.finished) {
-      dealNewRound(match);
-    }
-  }, 1000);
-}
-
-function tryMatchPlayers() {
-  if (TEST_MODE) {
-    if (waitingPlayers.length >= 1) {
-      const player = waitingPlayers.shift();
-      createMatch(player);
-    }
-
-    return;
-  }
-
-  while (waitingPlayers.length >= 4) {
-    const players = waitingPlayers.splice(0, 4);
-    startRealMatch(players);
-  }
+  console.log(
+    `Match ${match.id}: Deal ${match.dealNumber} started`
+  );
 }
 
 function startRealMatch(players) {
@@ -292,24 +229,33 @@ function startRealMatch(players) {
 
   const match = {
     id: matchId,
-    players,
+
+    players: players,
+
     hands: [
       [],
       [],
       [],
       [],
     ],
+
     scores: [
       0,
       0,
       0,
       0,
     ],
+
     trick: [],
+
     tricksPlayed: 0,
+
     dealNumber: 0,
+
     firstSeat: 0,
+
     currentSeat: 0,
+
     finished: false,
   };
 
@@ -324,8 +270,11 @@ function startRealMatch(players) {
   players.forEach((player, index) => {
     send(player, {
       type: 'match_found',
-      matchId,
+
+      matchId: matchId,
+
       seat: index,
+
       players: players.map((p) => ({
         name: p.name,
         seat: p.seat,
@@ -333,11 +282,29 @@ function startRealMatch(players) {
     });
   });
 
+  console.log(
+    `REAL MATCH ${matchId}: ${players
+      .map((p) => p.name)
+      .join(', ')}`
+  );
+
   setTimeout(() => {
     if (!match.finished) {
       dealNewRound(match);
     }
   }, 1000);
+}
+
+function tryMatchPlayers() {
+  if (TEST_MODE) {
+    return;
+  }
+
+  while (waitingPlayers.length >= 4) {
+    const players = waitingPlayers.splice(0, 4);
+
+    startRealMatch(players);
+  }
 }
 
 function finishMatch(match) {
@@ -360,16 +327,29 @@ function finishMatch(match) {
 
   broadcast(match, {
     type: 'game_over',
+
     scores: match.scores,
-    winner,
-    winnerName: match.players[winner].name,
-    players: match.players.map((player) => ({
-      name: player.name,
-      seat: player.seat,
-      isBot: player.isBot,
-    })),
-    reason: 'A player reached 100 points.',
+
+    winner: winner,
+
+    winnerName:
+      match.players[winner].name,
+
+    players: match.players.map(
+      (player) => ({
+        name: player.name,
+        seat: player.seat,
+        isBot: player.isBot,
+      })
+    ),
+
+    reason:
+      'A player reached 100 points.',
   });
+
+  console.log(
+    `Match ${match.id} finished. Winner: ${match.players[winner].name}`
+  );
 
   setTimeout(() => {
     matches.delete(match.id);
@@ -377,25 +357,33 @@ function finishMatch(match) {
 }
 
 function finishTrick(match) {
-  const finishedTrick = [...match.trick];
+  const finishedTrick = [
+    ...match.trick,
+  ];
 
-  const winner = findTrickWinner(
-    finishedTrick
-  );
+  const winner =
+    findTrickWinner(
+      finishedTrick
+    );
 
   let points = 0;
 
   for (const played of finishedTrick) {
-    points += cardPoints(played.card);
+    points += cardPoints(
+      played.card
+    );
   }
 
   match.scores[winner] += points;
+
   match.tricksPlayed++;
+
   match.currentSeat = winner;
 
-  const reached100 = match.scores.some(
-    (score) => score >= 100
-  );
+  const reached100 =
+    match.scores.some(
+      (score) => score >= 100
+    );
 
   const dealFinished =
     match.tricksPlayed === 13;
@@ -404,12 +392,22 @@ function finishTrick(match) {
 
   broadcast(match, {
     type: 'trick_result',
+
     trick: finishedTrick,
-    scores: [...match.scores],
-    currentSeat: match.currentSeat,
-    dealOver: reached100 || dealFinished,
-    winner,
-    points,
+
+    scores: [
+      ...match.scores,
+    ],
+
+    currentSeat:
+      match.currentSeat,
+
+    dealOver:
+      reached100 || dealFinished,
+
+    winner: winner,
+
+    points: points,
   });
 
   if (reached100) {
@@ -421,7 +419,8 @@ function finishTrick(match) {
   }
 
   if (dealFinished) {
-    match.firstSeat = match.currentSeat;
+    match.firstSeat =
+      match.currentSeat;
 
     setTimeout(() => {
       if (!match.finished) {
@@ -433,7 +432,7 @@ function finishTrick(match) {
   }
 
   setTimeout(() => {
-    playBotIfNeeded(match);
+    playNextIfNeeded(match);
   }, 500);
 }
 
@@ -447,7 +446,9 @@ function playCard(match, player, data) {
   if (seat !== match.currentSeat) {
     send(player, {
       type: 'error',
-      message: 'It is not your turn.',
+
+      message:
+        'It is not your turn.',
     });
 
     return;
@@ -462,7 +463,9 @@ function playCard(match, player, data) {
   ) {
     send(player, {
       type: 'error',
-      message: 'Invalid card.',
+
+      message:
+        'Invalid card.',
     });
 
     return;
@@ -479,6 +482,7 @@ function playCard(match, player, data) {
   ) {
     send(player, {
       type: 'error',
+
       message:
         'You must follow the lead suit if you have one.',
     });
@@ -486,17 +490,19 @@ function playCard(match, player, data) {
     return;
   }
 
-  const cardIndex = hand.findIndex(
-    (card) =>
-      sameCard(
-        card,
-        selectedCard
-      )
-  );
+  const cardIndex =
+    hand.findIndex(
+      (card) =>
+        sameCard(
+          card,
+          selectedCard
+        )
+    );
 
   if (cardIndex === -1) {
     send(player, {
       type: 'error',
+
       message:
         'You do not have this card.',
     });
@@ -504,13 +510,15 @@ function playCard(match, player, data) {
     return;
   }
 
-  const playedCard = hand.splice(
-    cardIndex,
-    1
-  )[0];
+  const playedCard =
+    hand.splice(
+      cardIndex,
+      1
+    )[0];
 
   match.trick.push({
-    seat,
+    seat: seat,
+
     card: playedCard,
   });
 
@@ -524,53 +532,21 @@ function playCard(match, player, data) {
 
   broadcast(match, {
     type: 'played',
-    trick: match.trick,
-    currentSeat: match.currentSeat,
-  });
 
-  setTimeout(() => {
-    playBotIfNeeded(match);
-  }, 500);
+    trick: match.trick,
+
+    currentSeat:
+      match.currentSeat,
+  });
 }
 
-function playBotIfNeeded(match) {
+function playNextIfNeeded(match) {
   if (match.finished) {
     return;
   }
 
-  const seat = match.currentSeat;
-  const player = match.players[seat];
-
-  if (!player || !player.isBot) {
-    return;
-  }
-
-  const hand = match.hands[seat];
-
-  if (!hand || hand.length === 0) {
-    return;
-  }
-
-  const legalCards = getLegalCards(
-    hand,
-    match.trick
-  );
-
-  if (legalCards.length === 0) {
-    return;
-  }
-
-  const card =
-    legalCards[
-      Math.floor(
-        Math.random() *
-        legalCards.length
-      )
-    ];
-
-  playCard(match, player, {
-    card,
-  });
+  // Online mode contains real players only.
+  // The next player will submit their card.
 }
 
 server.on('connection', (socket) => {
@@ -578,26 +554,33 @@ server.on('connection', (socket) => {
 
   const player = {
     name: 'Player',
+
     seat: null,
+
     matchId: null,
+
     inMatch: false,
+
     isBot: false,
-    socket,
+
+    socket: socket,
   };
 
   socket.player = player;
 
   send(player, {
     type: 'connected',
+
     message:
       'Connected to Black Queen server',
   });
 
   socket.on('message', (message) => {
     try {
-      const data = JSON.parse(
-        message.toString()
-      );
+      const data =
+        JSON.parse(
+          message.toString()
+        );
 
       if (
         data.type ===
@@ -607,8 +590,13 @@ server.on('connection', (socket) => {
           return;
         }
 
+        const name =
+          typeof data.name === 'string'
+            ? data.name.trim()
+            : '';
+
         player.name =
-          data.name || 'Player';
+          name || 'Player';
 
         if (
           !waitingPlayers.includes(
@@ -619,14 +607,12 @@ server.on('connection', (socket) => {
             player
           );
 
-          send(player, {
-            type: 'searching',
-            playersWaiting: 1,
-            message:
-              TEST_MODE
-                ? 'Starting test game...'
-                : 'Searching for players...',
-          });
+          console.log(
+            `${player.name} joined matchmaking`
+          );
+
+          // Immediately update EVERYONE waiting.
+          broadcastWaitingPlayers();
 
           tryMatchPlayers();
         }
@@ -648,10 +634,17 @@ server.on('connection', (socket) => {
             index,
             1
           );
+
+          console.log(
+            `${player.name} cancelled matchmaking`
+          );
+
+          broadcastWaitingPlayers();
         }
 
         send(player, {
-          type: 'search_cancelled',
+          type:
+            'search_cancelled',
         });
 
         return;
@@ -663,6 +656,7 @@ server.on('connection', (socket) => {
         if (!player.inMatch) {
           send(player, {
             type: 'error',
+
             message:
               'You are not in a match.',
           });
@@ -670,13 +664,15 @@ server.on('connection', (socket) => {
           return;
         }
 
-        const match = matches.get(
-          player.matchId
-        );
+        const match =
+          matches.get(
+            player.matchId
+          );
 
         if (!match) {
           send(player, {
             type: 'error',
+
             message:
               'Match not found.',
           });
@@ -693,12 +689,6 @@ server.on('connection', (socket) => {
         return;
       }
 
-      if (
-        data.type ===
-        'next_deal'
-      ) {
-        return;
-      }
     } catch (error) {
       console.error(
         'Message handling error:',
@@ -718,37 +708,54 @@ server.on('connection', (socket) => {
     );
 
     const waitingIndex =
-      waitingPlayers.indexOf(player);
+      waitingPlayers.indexOf(
+        player
+      );
 
     if (waitingIndex !== -1) {
       waitingPlayers.splice(
         waitingIndex,
         1
       );
+
+      // Tell remaining waiting players
+      // that this player left.
+      broadcastWaitingPlayers();
     }
 
     if (player.matchId) {
-      const match = matches.get(
-        player.matchId
-      );
+      const match =
+        matches.get(
+          player.matchId
+        );
 
-      if (match && !match.finished) {
+      if (
+        match &&
+        !match.finished
+      ) {
         match.finished = true;
 
-        match.players.forEach((p) => {
-          if (p !== player && !p.isBot) {
-            send(p, {
-              type: 'error',
-              message:
-                'The other player disconnected.',
-            });
+        match.players.forEach(
+          (p) => {
+            if (
+              p !== player
+            ) {
+              send(p, {
+                type: 'error',
 
-            p.inMatch = false;
-            p.matchId = null;
+                message:
+                  'The other player disconnected.',
+              });
+
+              p.inMatch = false;
+              p.matchId = null;
+            }
           }
-        });
+        );
 
-        matches.delete(match.id);
+        matches.delete(
+          match.id
+        );
       }
     }
 
